@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Foco: uma tarefa por vez</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1f6feb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
 :root{--bg:#eef2f6;--card:#fff;--ink:#16202e;--mute:#5d6b7c;--line:#d6dde6;--accent:#1f6feb;--track:#dbe3ee;--ok:#1e8a5a;--warn:#c2410c;
 box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -115,7 +119,15 @@ var wl=null;
 function wakeOn(){try{if(navigator.wakeLock&&!wl){navigator.wakeLock.request("screen").then(function(l){wl=l;l.addEventListener("release",function(){wl=null})}).catch(function(){})}}catch(e){}}
 function wakeOff(){try{if(wl){wl.release();wl=null}}catch(e){}}
 function askNotif(){try{if("Notification" in window&&Notification.permission==="default")Notification.requestPermission()}catch(e){}}
-function notify(t,b){try{if("Notification" in window&&Notification.permission==="granted"&&document.hidden)new Notification(t,{body:b})}catch(e){}}
+var swReg=null;
+try{if("serviceWorker" in navigator&&location.protocol.indexOf("http")===0)navigator.serviceWorker.register("sw.js").then(function(r){swReg=r}).catch(function(){})}catch(e){}
+function notify(t,b){
+  try{
+    if(!("Notification" in window)||Notification.permission!=="granted"||!document.hidden)return;
+    if(swReg&&swReg.showNotification)swReg.showNotification(t,{body:b,icon:"icon-192.png",vibrate:[300,150,300],tag:"foco"});
+    else new Notification(t,{body:b});
+  }catch(e){}
+}
 document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"){if((running||phase==="rest")&&!wl)wakeOn();render()}});
 function pickNext(){var n=tasks.find(function(t){return !t.done});curId=n?n.id:null}
 
