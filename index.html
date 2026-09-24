@@ -79,7 +79,7 @@ li button{min-height:40px;padding:6px 12px;font-size:.9rem}
 
 <h2>Fila de hoje</h2>
 <ul id="lista"></ul>
-<p class="aviso">Versão de teste. Regra do descanso: base + minutos economizados (até 10). Tudo fica salvo só neste aparelho. Mantenha a aba aberta para o alarme tocar.</p>
+<p class="aviso">Versão de teste. Regra do descanso: base + minutos economizados (até 10). Tudo fica salvo só neste aparelho. A tela fica ligada enquanto o tempo corre. Permita as notificações para ser avisado se sair da aba.</p>
 </main>
 
 <script>
@@ -111,6 +111,12 @@ function beep(f){
 }
 function startAlarm(f){stopAlarm();beep(f);alarmTimer=setInterval(function(){beep(f)},2500);if(navigator.vibrate){try{navigator.vibrate([300,150,300])}catch(e){}}}
 function stopAlarm(){if(alarmTimer){clearInterval(alarmTimer);alarmTimer=null}}
+var wl=null;
+function wakeOn(){try{if(navigator.wakeLock&&!wl){navigator.wakeLock.request("screen").then(function(l){wl=l;l.addEventListener("release",function(){wl=null})}).catch(function(){})}}catch(e){}}
+function wakeOff(){try{if(wl){wl.release();wl=null}}catch(e){}}
+function askNotif(){try{if("Notification" in window&&Notification.permission==="default")Notification.requestPermission()}catch(e){}}
+function notify(t,b){try{if("Notification" in window&&Notification.permission==="granted"&&document.hidden)new Notification(t,{body:b})}catch(e){}}
+document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"&&(running||phase==="rest")&&!wl)wakeOn()});
 function pickNext(){var n=tasks.find(function(t){return !t.done});curId=n?n.id:null}
 
 function render(){
@@ -158,32 +164,32 @@ function render(){
 
 function loop(){
   if(phase==="rest"){
-    if((restEnd-Date.now())<=0&&!restRang){restRang=true;startAlarm(660)}
+    if((restEnd-Date.now())<=0&&!restRang){restRang=true;startAlarm(660);notify("Descanso acabou","Hora de voltar ao foco")}
     render();return;
   }
   var t=cur();if(!t||!running)return;
-  if((endAt-Date.now())<=0&&!t.alarmed){t.alarmed=true;startAlarm(880);save()}
+  if((endAt-Date.now())<=0&&!t.alarmed){t.alarmed=true;startAlarm(880);notify("Tempo acabou",t.name);save()}
   render();
 }
 function start(){
   var t=cur();if(!t)return;
   try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume()}catch(e){}
-  endAt=Date.now()+(t.min*60+(t.extra||0)*60-(t.spent||0))*1000;startedAt=Date.now();running=true;
+  endAt=Date.now()+(t.min*60+(t.extra||0)*60-(t.spent||0))*1000;startedAt=Date.now();running=true;wakeOn();askNotif();
   clearInterval(tick);tick=setInterval(loop,500);render();
 }
-function pause(){var t=cur();if(!t)return;t.spent=(t.spent||0)+(Date.now()-startedAt)/1000;running=false;clearInterval(tick);save();render()}
+function pause(){var t=cur();if(!t)return;t.spent=(t.spent||0)+(Date.now()-startedAt)/1000;running=false;clearInterval(tick);wakeOff();save();render()}
 function startRest(min,text){
-  phase="rest";restTotal=min*60;restEnd=Date.now()+restTotal*1000;restRang=false;restNote=text;
+  phase="rest";restTotal=min*60;restEnd=Date.now()+restTotal*1000;restRang=false;restNote=text;wakeOn();
   clearInterval(tick);tick=setInterval(loop,500);
 }
 var restNote="";
-function endRest(){phase="focus";stopAlarm();clearInterval(tick);running=false;restRang=false;render()}
+function endRest(){phase="focus";stopAlarm();wakeOff();clearInterval(tick);running=false;restRang=false;render()}
 function done(){
   var t=cur();if(!t)return;
   var spent=(t.spent||0)+(running?(Date.now()-startedAt)/1000:0);
   var total=t.min*60+(t.extra||0)*60;
   var saved=Math.max(0,total-spent),bonus=Math.min(10,Math.floor(saved/60));
-  t.done=true;t.real=spent;running=false;clearInterval(tick);stopAlarm();
+  t.done=true;t.real=spent;running=false;clearInterval(tick);stopAlarm();wakeOff();
   stats.done++;if(spent<=total)stats.ontime++;
   pickNext();
   var mins=base+bonus;
