@@ -116,7 +116,7 @@ function wakeOn(){try{if(navigator.wakeLock&&!wl){navigator.wakeLock.request("sc
 function wakeOff(){try{if(wl){wl.release();wl=null}}catch(e){}}
 function askNotif(){try{if("Notification" in window&&Notification.permission==="default")Notification.requestPermission()}catch(e){}}
 function notify(t,b){try{if("Notification" in window&&Notification.permission==="granted"&&document.hidden)new Notification(t,{body:b})}catch(e){}}
-document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"&&(running||phase==="rest")&&!wl)wakeOn()});
+document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"){if((running||phase==="rest")&&!wl)wakeOn();render()}});
 function pickNext(){var n=tasks.find(function(t){return !t.done});curId=n?n.id:null}
 
 function render(){
@@ -193,7 +193,7 @@ function done(){
   stats.done++;if(spent<=total)stats.ontime++;
   pickNext();
   var mins=base+bonus;
-  if(cur()&&mins>0){
+  if(mins>0){
     stats.rest+=mins;
     startRest(mins,bonus>0?"Você ganhou "+mins+" min ("+base+" base + "+bonus+" por terminar antes)":"Você ganhou "+mins+" min de descanso");
   }
