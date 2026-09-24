@@ -33,6 +33,11 @@ h1{font-size:1.4rem;margin:0 0 4px}
 .cfg{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px}
 .cfg input{width:76px;min-height:44px;padding:8px 10px}
 .cfg p{margin:0;color:var(--mute);font-size:.9rem}
+.nt{flex-direction:column;align-items:stretch}
+.nt label{display:flex;gap:10px;align-items:center;font-weight:600}
+.nt input{width:24px;min-height:24px;padding:0}
+.nt code{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:2px 8px;font-weight:700;user-select:all}
+.nt button{min-height:44px;padding:8px 14px;align-self:flex-start}
 .time{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .time b{font-size:clamp(2.4rem,14vw,3.4rem);font-variant-numeric:tabular-nums;letter-spacing:-1px}
 .time span{color:var(--mute);font-size:.9rem}
@@ -81,6 +86,19 @@ li button{min-height:40px;padding:6px 12px;font-size:.9rem}
 
 <div class="card cfg"><label>Descanso base <input id="base" type="number" min="0" max="30" value="5" aria-label="Descanso base em minutos"> min</label><p id="stats"></p></div>
 
+<div class="card cfg nt">
+  <label><input type="checkbox" id="auOn" checked> Alarme por áudio (tela bloqueada)</label>
+  <p>O app toca um áudio silencioso que termina em alarme, então o celular toca mesmo bloqueado. Pode pausar a música e precisa do volume de mídia ligado.</p>
+  <button type="button" id="auTest">Testar (10 s)</button>
+  <p id="auMsg"></p>
+</div>
+
+<div class="card cfg nt">
+  <label><input type="checkbox" id="ntOn"> Aviso com celular bloqueado (ntfy)</label>
+  <p id="ntInfo"></p>
+  <button type="button" id="ntTest" hidden>Enviar aviso de teste</button>
+</div>
+
 <h2>Fila de hoje</h2>
 <ul id="lista"></ul>
 <p class="aviso">Versão de teste. Regra do descanso: base + minutos economizados (até 10). Tudo fica salvo só neste aparelho. A tela fica ligada enquanto o tempo corre. Permita as notificações para ser avisado se sair da aba.</p>
@@ -90,10 +108,12 @@ li button{min-height:40px;padding:6px 12px;font-size:.9rem}
 var tasks=[],curId=null,running=false,endAt=0,startedAt=0,tick=null,actx=null,alarmTimer=null;
 var phase="focus",restEnd=0,restTotal=0,restRang=false,base=5,stats={rest:0,ontime:0,done:0};
 var C=2*Math.PI*52;
+var nt={on:false,topic:""};
+var audEl=null,audUrl=null,audArmed=false,audRing=false,auOn=true;
 var $=function(i){return document.getElementById(i)};
 
-function load(){try{var s=localStorage.getItem("foco-tarefas");if(s){var d=JSON.parse(s);tasks=d.tasks||[];if(typeof d.base==="number")base=d.base;if(d.stats)stats=d.stats}}catch(e){}}
-function save(){try{localStorage.setItem("foco-tarefas",JSON.stringify({tasks:tasks,base:base,stats:stats}))}catch(e){}}
+function load(){try{var s=localStorage.getItem("foco-tarefas");if(s){var d=JSON.parse(s);tasks=d.tasks||[];if(typeof d.base==="number")base=d.base;if(d.stats)stats=d.stats;if(d.nt)nt=d.nt;if(typeof d.au==="boolean")auOn=d.au}}catch(e){}}
+function save(){try{localStorage.setItem("foco-tarefas",JSON.stringify({tasks:tasks,base:base,stats:stats,nt:nt,au:auOn}))}catch(e){}}
 function cur(){return tasks.find(function(t){return t.id===curId})}
 function fmt(s){var neg=s<0;s=Math.abs(Math.round(s));var m=Math.floor(s/60),x=s%60;return (neg?"+":"")+String(m).padStart(2,"0")+":"+String(x).padStart(2,"0")}
 function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
@@ -128,7 +148,60 @@ function notify(t,b){
     else new Notification(t,{body:b});
   }catch(e){}
 }
-document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"){if((running||phase==="rest")&&!wl)wakeOn();render()}});
+document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"){if((running||phase==="rest")&&!wl)wakeOn();loop();render()}});
+function ntSend(seq,secs,title,msg){
+  if(!nt.on||!nt.topic||secs<11)return;
+  try{fetch("https://ntfy.sh/"+nt.topic,{method:"POST",headers:{"X-Sequence-ID":seq,"Delay":Math.round(secs)+"s","Title":title,"Priority":"high","Tags":"alarm_clock"},body:msg}).catch(function(){})}catch(e){}
+}
+function ntCancel(seq){
+  if(!nt.on||!nt.topic)return;
+  try{fetch("https://ntfy.sh/"+nt.topic+"/"+seq,{method:"DELETE"}).catch(function(){})}catch(e){}
+}
+function ntRender(){
+  $("ntOn").checked=nt.on;
+  $("ntTest").hidden=!nt.on;
+  $("ntInfo").innerHTML=nt.on?'1) Instale o app gratuito <b>ntfy</b> (Android ou iPhone). 2) Toque em + e assine o tópico <code>'+nt.topic+'</code>. 3) Pronto: o alarme chega mesmo com a tela bloqueada. Não compartilhe este tópico.':'Instale o app gratuito ntfy no celular para receber o alarme com a tela bloqueada. Marque a opção para ver como.';
+}
+function makeWav(silSecs,f,alarmSecs){
+  var SR=4000,ns=Math.round(silSecs*SR),na=Math.round(alarmSecs*SR),n=ns+na;
+  var buf=new ArrayBuffer(44+n),v=new DataView(buf),u=new Uint8Array(buf);
+  function w(o,t){for(var i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))}
+  w(0,"RIFF");v.setUint32(4,36+n,true);w(8,"WAVE");w(12,"fmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,SR,true);v.setUint32(28,SR,true);v.setUint16(32,1,true);v.setUint16(34,8,true);w(36,"data");v.setUint32(40,n,true);
+  u.fill(128,44,44+ns);
+  for(var i=0;i<na;i++){
+    var t=i/SR,p=t%2.5,lt=-1;
+    if(p<0.3)lt=p;else if(p>=0.35&&p<0.65)lt=p-0.35;else if(p>=0.7&&p<1.0)lt=p-0.7;
+    var x=128;
+    if(lt>=0){var env=Math.min(1,lt/0.03,(0.3-lt)/0.05);x=128+Math.round(110*Math.max(0,env)*Math.sin(2*Math.PI*f*t))}
+    u[44+ns+i]=x;
+  }
+  return buf;
+}
+function msSet(title){
+  try{
+    if(!("mediaSession" in navigator))return;
+    navigator.mediaSession.metadata=new MediaMetadata({title:title,artist:"Foco TDAH",artwork:[{src:"icon-192.png",sizes:"192x192",type:"image/png"}]});
+    navigator.mediaSession.setActionHandler("pause",function(){if(phase==="focus"&&running)pause()});
+  }catch(e){}
+}
+function audStop(){
+  try{if(audEl){audEl.onended=null;audEl.pause();audEl.removeAttribute("src");audEl.load()}}catch(e){}
+  if(audUrl){try{URL.revokeObjectURL(audUrl)}catch(e){}audUrl=null}
+  audArmed=false;audRing=false;
+}
+function audArm(secs,f,title){
+  audStop();
+  if(!auOn||secs<2||secs>5400)return;
+  try{
+    audUrl=URL.createObjectURL(new Blob([makeWav(secs,f,30)],{type:"audio/wav"}));
+    audEl=audEl||new Audio();
+    audEl.src=audUrl;
+    audEl.onended=function(){audArmed=false;audRing=false;render()};
+    var pr=audEl.play();
+    if(pr&&pr.then)pr.then(function(){audArmed=true;msSet(title)}).catch(function(){audArmed=false});
+    else{audArmed=true;msSet(title)}
+  }catch(e){audArmed=false}
+}
 function pickNext(){var n=tasks.find(function(t){return !t.done});curId=n?n.id:null}
 
 function render(){
@@ -156,7 +229,7 @@ function render(){
     $("hint").textContent=over?"tempo extra":(running?"restante":"pronto para começar");
     ring.classList.toggle("over",over);
     $("arc").setAttribute("stroke-dashoffset",String(C*(1-(over?0:Math.max(0,Math.min(1,rem/total))))));
-    if(alarmTimer){ctr.innerHTML='<button class="ok" data-a="done">Concluir</button><button data-a="more">+5 min</button>'}
+    if(alarmTimer||audRing||(running&&rem<=0)){ctr.innerHTML='<button class="ok" data-a="done">Concluir</button><button data-a="more">+5 min</button>'}
     else if(running){ctr.innerHTML='<button data-a="pause">Pausar</button><button class="ok" data-a="done">Concluir</button>'}
     else{ctr.innerHTML='<button class="main" data-a="start">'+((t.spent||0)>0?"Continuar":"Iniciar")+'</button>'}
   }
@@ -176,32 +249,32 @@ function render(){
 
 function loop(){
   if(phase==="rest"){
-    if((restEnd-Date.now())<=0&&!restRang){restRang=true;startAlarm(660);notify("Descanso acabou","Hora de voltar ao foco")}
+    if((restEnd-Date.now())<=0&&!restRang){restRang=true;if(!document.hidden)ntCancel("foco-rest");if(audArmed)audRing=true;else startAlarm(660);notify("Descanso acabou","Hora de voltar ao foco")}
     render();return;
   }
   var t=cur();if(!t||!running)return;
-  if((endAt-Date.now())<=0&&!t.alarmed){t.alarmed=true;startAlarm(880);notify("Tempo acabou",t.name);save()}
+  if((endAt-Date.now())<=0&&!t.alarmed){t.alarmed=true;if(!document.hidden)ntCancel("foco-focus");if(audArmed)audRing=true;else startAlarm(880);notify("Tempo acabou",t.name);save()}
   render();
 }
 function start(){
   var t=cur();if(!t)return;
   try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume()}catch(e){}
-  endAt=Date.now()+(t.min*60+(t.extra||0)*60-(t.spent||0))*1000;startedAt=Date.now();running=true;wakeOn();askNotif();
+  endAt=Date.now()+(t.min*60+(t.extra||0)*60-(t.spent||0))*1000;startedAt=Date.now();running=true;wakeOn();askNotif();audArm((endAt-Date.now())/1000,880,t.name);ntSend("foco-focus",(endAt-Date.now())/1000,"Tempo acabou",t.name+": hora de concluir");
   clearInterval(tick);tick=setInterval(loop,500);render();
 }
-function pause(){var t=cur();if(!t)return;t.spent=(t.spent||0)+(Date.now()-startedAt)/1000;running=false;clearInterval(tick);wakeOff();save();render()}
+function pause(){var t=cur();if(!t)return;t.spent=(t.spent||0)+(Date.now()-startedAt)/1000;running=false;clearInterval(tick);wakeOff();ntCancel("foco-focus");audStop();save();render()}
 function startRest(min,text){
-  phase="rest";restTotal=min*60;restEnd=Date.now()+restTotal*1000;restRang=false;restNote=text;wakeOn();
+  phase="rest";restTotal=min*60;restEnd=Date.now()+restTotal*1000;restRang=false;restNote=text;wakeOn();ntSend("foco-rest",restTotal,"Descanso acabou","Hora de voltar ao foco");audArm(restTotal,660,"Descanso");
   clearInterval(tick);tick=setInterval(loop,500);
 }
 var restNote="";
-function endRest(){phase="focus";stopAlarm();wakeOff();clearInterval(tick);running=false;restRang=false;render()}
+function endRest(){phase="focus";stopAlarm();wakeOff();ntCancel("foco-rest");audStop();clearInterval(tick);running=false;restRang=false;render()}
 function done(){
   var t=cur();if(!t)return;
   var spent=(t.spent||0)+(running?(Date.now()-startedAt)/1000:0);
   var total=t.min*60+(t.extra||0)*60;
   var saved=Math.max(0,total-spent),bonus=Math.min(10,Math.floor(saved/60));
-  t.done=true;t.real=spent;running=false;clearInterval(tick);stopAlarm();wakeOff();
+  t.done=true;t.real=spent;running=false;clearInterval(tick);stopAlarm();wakeOff();ntCancel("foco-focus");audStop();
   stats.done++;if(spent<=total)stats.ontime++;
   pickNext();
   var mins=base+bonus;
@@ -211,7 +284,7 @@ function done(){
   }
   save();render();
 }
-function more(){var t=cur();if(!t)return;stopAlarm();t.extra=(t.extra||0)+5;t.alarmed=false;endAt+=300*1000;save();render()}
+function more(){var t=cur();if(!t)return;stopAlarm();t.extra=(t.extra||0)+5;t.alarmed=false;endAt+=300*1000;audStop();audArm((endAt-Date.now())/1000,880,t.name);ntSend("foco-focus",(endAt-Date.now())/1000,"Tempo acabou",t.name+": hora de concluir");save();render()}
 function move(id,dir){var i=tasks.findIndex(function(t){return t.id===id}),j=i+dir;if(i<0||j<0||j>=tasks.length)return;var a=tasks[i];tasks[i]=tasks[j];tasks[j]=a;save();render()}
 
 $("ctrls").addEventListener("click",function(e){var a=e.target.getAttribute("data-a");if(a==="start")start();else if(a==="pause")pause();else if(a==="done")done();else if(a==="more")more();else if(a==="back"||a==="skip")endRest()});
@@ -220,7 +293,7 @@ $("lista").addEventListener("click",function(e){
   if(g("data-u"))move(Number(g("data-u")),-1);
   else if(g("data-d"))move(Number(g("data-d")),1);
   else if(g("data-f")){if(phase==="rest")endRest();if(running)pause();curId=Number(g("data-f"));render()}
-  else if(g("data-x")){var id=Number(g("data-x"));if(id===curId){running=false;clearInterval(tick);stopAlarm()}tasks=tasks.filter(function(t){return t.id!==id});if(id===curId)pickNext();save();render()}
+  else if(g("data-x")){var id=Number(g("data-x"));if(id===curId){running=false;clearInterval(tick);stopAlarm();ntCancel("foco-focus");audStop()}tasks=tasks.filter(function(t){return t.id!==id});if(id===curId)pickNext();save();render()}
 });
 $("f").addEventListener("submit",function(e){
   e.preventDefault();
@@ -234,6 +307,17 @@ $("base").addEventListener("change",function(){var v=parseInt($("base").value,10
 
 load();
 $("base").value=base;
+if(!nt.topic){try{var a=new Uint8Array(6);crypto.getRandomValues(a);nt.topic="foco-"+Array.prototype.map.call(a,function(x){return (x%36).toString(36)}).join("")}catch(e){nt.topic="foco-"+Math.random().toString(36).slice(2,8)}save()}
+ntRender();
+$("auOn").checked=auOn;
+$("auOn").addEventListener("change",function(){auOn=$("auOn").checked;save();if(!auOn)audStop()});
+$("auTest").addEventListener("click",function(){
+  if(running||phase==="rest"){$("auMsg").textContent="Pare o temporizador antes de testar.";return}
+  var was=auOn;auOn=true;audArm(10,880,"Teste do alarme");auOn=was;
+  $("auMsg").textContent="Bloqueie a tela agora e espere 10 segundos: o alarme deve tocar.";
+});
+$("ntOn").addEventListener("change",function(){nt.on=$("ntOn").checked;save();ntRender()});
+$("ntTest").addEventListener("click",function(){try{fetch("https://ntfy.sh/"+nt.topic,{method:"POST",headers:{"Title":"Teste do Foco","Tags":"white_check_mark"},body:"Se você viu isto, o aviso com a tela bloqueada funciona."}).catch(function(){})}catch(e){}});
 tasks.forEach(function(t){t.alarmed=false});
 pickNext();render();
 </script>
